@@ -18,54 +18,52 @@ protocol FormModel {
     
 }
 
+extension FormModel {
+    
+    func specificValue<T>(for key: Key) -> T? {
+        if let value = value(for: key) {
+            return value as? T
+        }
+        return nil
+    }
+    
+}
+
 protocol OrderedKeysFormModel : FormModel {
     
     var orderedKeys: [Key] { get }
     
 }
 
-enum ValidationResult {
-    case valid
-    case notValid(reasons: [String])
-    
-    var reasons: [String] {
-        if case .notValid(reasons: let reasons) = self {
-            return reasons
-        }
-        return []
-    }
-}
-
-struct ValidationResultError : Error {
-    var reasons: [String]
-    init?(_ validationResult: ValidationResult) {
-        if validationResult.reasons.isEmpty {
-            return nil
-        }
-        self.reasons = validationResult.reasons
-    }
-}
-
-extension ValidationResult {
-    
-    static func combine(lhs: ValidationResult, rhs: ValidationResult) -> ValidationResult {
-        return lhs.and(rhs)
-    }
-    
-    func and(_ other: ValidationResult) -> ValidationResult {
-        switch (self, other) {
-        case (.valid, .valid):
-            return .valid
-        default:
-            return .notValid(reasons: self.reasons + other.reasons)
-        }
-    }
-    
-}
-
 protocol ValidatingValuesFormModel : FormModel {
     
     func validate(_ key: Key) -> ValidationResult
+    
+}
+
+extension ValidatingValuesFormModel {
+    
+    func validate(valueAt key: Key) -> ValidationResult {
+        switch validate(key) {
+        case .valid:
+            return .valid
+        case .notValid(reasons: let reasons):
+            var rs = reasons
+            if var last = rs.popLast() {
+                last.append(" (\(String(describing: key).capitalized))")
+                rs.append(last)
+            }
+            return .notValid(reasons: rs)
+        }
+    }
+    
+}
+
+extension ValidatingValuesFormModel where Self : OrderedKeysFormModel {
+    
+    func validateModelByCombining() -> ValidationResult {
+        return orderedKeys.map(self.validate(valueAt:)).reduce(.valid, ValidationResult.combine)
+    }
     
 }
 
@@ -78,38 +76,6 @@ protocol ValidatingModelFormModel : FormModel {
 protocol DictionaryBasedFormModel : FormModel {
     
     var fields: [Key : Value] { get set }
-    
-}
-
-struct Validator {
-    
-    var isNilValid: Bool
-    private let _validate: (Any) -> ValidationResult
-    
-    init(_ validate: @escaping (Any) -> ValidationResult, isNilValid: Bool = true) {
-        self._validate = validate
-        self.isNilValid = isNilValid
-    }
-    
-//    func validate(_ value: T?) -> ValidationResult {
-//        if let value = value {
-//            return _validate(value)
-//        } else {
-//            return validateNil()
-//        }
-//    }
-    
-    func validateNil() -> ValidationResult {
-        return isNilValid ? .valid : .notValid(reasons: ["No value"])
-    }
-    
-    func validate(_ value: Any?) -> ValidationResult {
-        if let value = value {
-            return _validate(value)
-        } else {
-            return validateNil()
-        }
-    }
     
 }
 
@@ -131,6 +97,32 @@ extension DictionaryBasedFormModel {
         try fields[key]?.set(any)
     }
     
+}
+
+protocol OutputtableFormModel : FormModel {
+    
+    associatedtype Output
+    
+    func output() throws -> Output
+    
+}
+
+extension OutputtableFormModel where Self : ValidatingModelFormModel {
+    
+    func validOutput() throws -> Output {
+        let validationResult = self.validateModel()
+        if let error = ValidationResultError.init(validationResult) {
+            throw error
+        }
+        return try output()
+    }
+    
+}
+
+struct A {
+    let name: String?
+    let age: Int?
+    let genderID: Int?
 }
 
 enum AModelKeys {
@@ -183,10 +175,6 @@ enum BasicModelValue : FormModelValue {
     
 }
 
-var some = BasicModelValue.selection([Gender.male.rawValue, Gender.female.rawValue], selected: 0, placeholder: "Select Gender")
-try! some.set(2)
-some
-
 struct AModel : OrderedKeysFormModel, ValidatingValuesFormModel, ValidatingModelFormModel, DictionaryBasedFormModel {
     
     typealias Key = AModelKeys
@@ -201,19 +189,58 @@ struct AModel : OrderedKeysFormModel, ValidatingValuesFormModel, ValidatingModel
     let orderedKeys: [AModelKeys] = [.name, .age, .gender]
     
     func validate(_ key: AModelKeys) -> ValidationResult {
+        let value = self.value(for: key)
         switch key {
+        case .name:
+            return val(value, with: Validators.stringLength0_30) ?? .valid
         case .age:
-            if let strAge = value(for: .age) as? String, let _ = Int(strAge) {
-                return .valid
-            }
-            return .notValid(reasons: ["Cannot convert string to int"])
-        default:
+            return transformingValidate(value, with: Validators.stringToInt)?
+                .validate(with: Validators.age0_99) ?? .valid
+        case .gender:
             return .valid
         }
     }
     
     func validateModel() -> ValidationResult {
-        return orderedKeys.map(self.validate).reduce(.valid, ValidationResult.combine)
+        return validateModelByCombining()
+    }
+    
+}
+
+extension AModel {
+    
+    enum Validators {
+        
+        static func stringLength0_30(_ string: String) -> ValidationResult {
+            return (0 ... 10) ~= string.characters.count ? .valid : .notValid(reasons: ["Invalid string length"])
+        }
+        
+        static let stringToInt: TransformingValidator<String, Int> = { string in
+            if let int = Int(string) {
+                return .valid(int)
+            } else {
+                return .notValid(reasons: ["Cannot convert String to Int"])
+            }
+        }
+        
+        static func age0_99(_ age: Int) -> ValidationResult {
+            return (0 ... 99) ~= age ? .valid : .notValid(reasons: ["Age should be from 0 to 99"])
+        }
+        
+    }
+    
+}
+
+extension String : Swift.Error { }
+
+extension AModel : OutputtableFormModel {
+    
+    typealias Output = A
+    
+    func output() throws -> A {
+        return A.init(name: specificValue(for: .name),
+                      age: specificValue(for: .age).flatMap({ Int($0) }),
+                      genderID: specificValue(for: .gender))
     }
     
 }
@@ -224,7 +251,7 @@ try! model.set("Alba", for: .name)
 print(model.orderedValues)
 try! model.set("15a", for: .age)
 model.validateModel()
-model.validate(.age)
+model.validate(valueAt: .age)
 
 try! model.set("15", for: .age)
 model.validateModel()
@@ -254,7 +281,7 @@ struct FormViewModel<RowIdentifier : Hashable, RowContent> : FormViewModelProtoc
     
     private var rows: [Row<RowIdentifier, RowContent>] = []
     
-    init(rows: [FormViewModel.ModelRow]) {
+    init(rows: [Row<RowIdentifier, RowContent>]) {
         self.rows = rows
     }
     
@@ -274,17 +301,6 @@ protocol FormViewModelGenerator {
     associatedtype RowContent
     
     func generate(from model: Model) -> FormViewModel<Model.Key, RowContent>
-    
-}
-
-struct FormViewModelBasicGenerator<Identifier : Hashable, FormModelValueType : FormModelValue, RowContent> {
-    
-    let generateRowContent: (FormModelValueType) -> RowContent
-    
-    func generateViewModel<Model : DictionaryBasedFormModel & OrderedKeysFormModel>(from model: Model) -> FormViewModel<Identifier, RowContent> where Model.Key == Identifier, Model.Value == FormModelValueType {
-        let rows = zip(model.orderedKeys, model.orderedValues).map({ Row<Identifier, RowContent>(identifier: $0.0, content: generateRowContent($0.1)) })
-        return FormViewModel(rows: rows)
-    }
     
 }
 
@@ -313,12 +329,22 @@ enum MFP {
 
 struct AFormViewModelGenerator : FormViewModelGenerator {
     
+    var needsValidation: Bool
+    
+    init(needsValidation: Bool = true) {
+        self.needsValidation = needsValidation
+    }
+    
     typealias Model = AModel
     typealias RowContent = MFP.RowContent
     
     func generate(from model: AModel) -> FormViewModel<AModelKeys, MFP.RowContent> {
         let rows = generateRows(from: model)
         return FormViewModel(rows: rows)
+    }
+    
+    func validateValue(for key: Model.Key) -> ValidationResult {
+        return needsValidation ? model.validate(valueAt: key) : .valid
     }
     
     func generateRows(from model: AModel) -> [Row<AModelKeys, MFP.RowContent>] {
@@ -328,7 +354,7 @@ struct AFormViewModelGenerator : FormViewModelGenerator {
                 let tfrm = MFP.TextFieldRowModel.init(text: string,
                                                       label: label(for: key),
                                                       keyboardType: keyboardType(for: inputType),
-                                                      validationState: model.validate(key))
+                                                      validationState: validateValue(for: key))
                 return Row(identifier: key, content: .textField(tfrm))
             case .selection(let selection, selected: let selected, placeholder: let placeholder):
                 let selectionRowModel = MFP.SelectionRowModel.init(label: label(for: key),
@@ -378,6 +404,7 @@ class Interactor {
     let output: Presenter
     init(output: Presenter) {
         self.output = output
+        output.updateViewModel(with: model)
     }
     
     var model = AModel()
@@ -397,9 +424,11 @@ class Presenter {
     
     let generator = AFormViewModelGenerator()
     weak var interactor: Interactor?
+    let view = View()
     
     func updateViewModel(with model: AModel) {
-        dump(generator.generate(from: model))
+        let viewModel = generator.generate(from: model)
+        view.viewModel = viewModel
     }
     
     func didSetValue(_ value: Any?, at key: AModelKeys) {
@@ -408,8 +437,38 @@ class Presenter {
     
 }
 
+class View {
+    
+    var viewModel: FormViewModel<AModelKeys, MFP.RowContent>! {
+        didSet {
+            dump(viewModel)
+            print(Date())
+        }
+    }
+    weak var output: Presenter!
+    
+    func somehowSet(_ value: Any?, at key: AModelKeys) {
+        output.didSetValue(value, at: key)
+    }
+    
+}
+
 let pr = Presenter()
 let inter = Interactor(output: pr)
 pr.interactor = inter
 
-pr.didSetValue(1, at: .gender)
+let view = pr.view
+view.output = pr
+view.somehowSet("15", at: .age)
+view.somehowSet(1, at: .gender)
+view.somehowSet("Alba Esso", at: .name)
+view.somehowSet("My name is Nathan Drake", at: .name)
+view.somehowSet("121", at: .age)
+inter.model.validateModel()
+
+do {
+    let output = try inter.model.validOutput()
+    print(output)
+} catch {
+    print(error)
+}
