@@ -37,14 +37,14 @@ protocol OrderedKeysFormModel : FormModel {
 
 protocol ValidatingValuesFormModel : FormModel {
     
-    func validate(_ key: Key) -> ValidationResult
+    func validate(valueAt key: Key) -> ValidationResult
     
 }
 
 extension ValidatingValuesFormModel {
     
-    func validate(valueAt key: Key) -> ValidationResult {
-        switch validate(key) {
+    func validateWithDescription(valueAt key: Key) -> ValidationResult {
+        switch validate(valueAt: key) {
         case .valid:
             return .valid
         case .notValid(reasons: let reasons):
@@ -62,7 +62,7 @@ extension ValidatingValuesFormModel {
 extension ValidatingValuesFormModel where Self : OrderedKeysFormModel {
     
     func validateModelByCombining() -> ValidationResult {
-        return orderedKeys.map(self.validate(valueAt:)).reduce(.valid, ValidationResult.combine)
+        return orderedKeys.map(self.validateWithDescription(valueAt:)).reduce(.valid, ValidationResult.combine)
     }
     
 }
@@ -188,7 +188,7 @@ struct AModel : OrderedKeysFormModel, ValidatingValuesFormModel, ValidatingModel
     
     let orderedKeys: [AModelKeys] = [.name, .age, .gender]
     
-    func validate(_ key: AModelKeys) -> ValidationResult {
+    func validate(valueAt key: AModelKeys) -> ValidationResult {
         let value = self.value(for: key)
         switch key {
         case .name:
@@ -251,7 +251,7 @@ try! model.set("Alba", for: .name)
 print(model.orderedValues)
 try! model.set("15a", for: .age)
 model.validateModel()
-model.validate(valueAt: .age)
+model.validateWithDescription(valueAt: .age)
 
 try! model.set("15", for: .age)
 model.validateModel()
@@ -344,7 +344,7 @@ struct AFormViewModelGenerator : FormViewModelGenerator {
     }
     
     func validateValue(for key: Model.Key) -> ValidationResult {
-        return needsValidation ? model.validate(valueAt: key) : .valid
+        return needsValidation ? model.validateWithDescription(valueAt: key) : .valid
     }
     
     func generateRows(from model: AModel) -> [Row<AModelKeys, MFP.RowContent>] {

@@ -36,7 +36,7 @@ protocol ValidatingValuesFormModel : FormModel {
 
 extension ValidatingValuesFormModel {
     
-    func validate(valueAt key: Key) -> ValidationResult {
+    func validateWithDescription(valueAt key: Key) -> ValidationResult {
         switch validate(key) {
         case .valid:
             return .valid
@@ -55,7 +55,7 @@ extension ValidatingValuesFormModel {
 extension ValidatingValuesFormModel where Self : OrderedKeysFormModel {
     
     func validateModelByCombining() -> ValidationResult {
-        return orderedKeys.map(self.validate(valueAt:)).reduce(.valid, ValidationResult.combine)
+        return orderedKeys.map(self.validateWithDescription(valueAt:)).reduce(.valid, ValidationResult.combine)
     }
     
 }
@@ -323,7 +323,7 @@ struct AFormViewModelGenerator : FormViewModelGenerator {
     }
     
     func validateValue(for key: Model.Key) -> ValidationResult {
-        return needsValidation ? model.validate(valueAt: key) : .valid
+        return needsValidation ? model.validateWithDescription(valueAt: key) : .valid
     }
     
     func generateRows(from model: AModel) -> [Row<AModelKeys, MFP.RowContent>] {
@@ -447,7 +447,4 @@ inter.model.validateModel()
 
 do {
     let output = try inter.model.validOutput()
-    print(output)
-} catch {
-    print(error)
-}
+  
